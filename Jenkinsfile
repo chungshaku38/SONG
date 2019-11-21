@@ -2,6 +2,8 @@ def commit = "UNKNOWN"
 def version = "UNKNOWN"
 import groovy.json.JsonOutput
 
+import groovy.json.JsonOutput
+
 pipeline {
     agent {
         kubernetes {
@@ -59,7 +61,47 @@ spec:
         stage('Test') {
             steps {
                 container('jdk') {
-                    sh "./mvnw package -DskipTests "
+                    sh "./mvnw test package"
+                }
+            }
+        }
+        stage('Build & Publish Develop') {
+            when {
+                branch "develop"
+            }
+            steps {
+                container('docker') {
+                    withCredentials([usernamePassword(credentialsId:'OvertureDockerHub', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
+                        sh 'docker login -u $USERNAME -p $PASSWORD'
+                    }
+                    sh "docker build --target=server --network=host -f Dockerfile . -t overture/song-server:edge -t overture/song-server:${commit}"
+                    sh "docker build --target=client --network=host -f Dockerfile . -t overture/song-client:edge -t overture/song-client:${commit}"
+                    sh "docker push overture/song-server:${commit}"
+                    sh "docker push overture/song-server:edge"
+                    sh "docker push overture/song-client:${commit}"
+                    sh "docker push overture/song-client:edge"
+                }
+            }
+        }
+        stage('Release & tag') {
+          when {
+            branch "master"
+          }
+          steps {
+                container('docker') {
+                    withCredentials([usernamePassword(credentialsId: 'OvertureBioGithub', passwordVariable: 'GIT_PASSWORD', usernameVariable: 'GIT_USERNAME')]) {
+                        sh "git tag ${version}"
+                        sh "git push https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/overture-stack/song --tags"
+                    }
+                    withCredentials([usernamePassword(credentialsId:'OvertureDockerHub', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
+                        sh 'docker login -u $USERNAME -p $PASSWORD'
+                    }
+                    sh "docker build --target=server --network=host -f Dockerfile . -t overture/song-server:latest -t overture/song-server:${version}"
+                    sh "docker build --target=client --network=host -f Dockerfile . -t overture/song-client:latest -t overture/song-client:${version}"
+                    sh "docker push overture/song-server:${version}"
+                    sh "docker push overture/song-server:latest"
+                    sh "docker push overture/song-client:${version}"
+                    sh "docker push overture/song-client:latest"
                 }
             }
         }
