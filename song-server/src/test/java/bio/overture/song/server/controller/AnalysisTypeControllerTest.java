@@ -62,6 +62,7 @@ import com.google.common.collect.ImmutableSet;
 import java.nio.file.Paths;
 import java.util.List;
 import java.util.function.Supplier;
+import java.util.stream.Stream;
 import javax.transaction.Transactional;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
@@ -69,7 +70,6 @@ import lombok.val;
 import net.javacrumbs.jsonunit.core.Configuration;
 import org.everit.json.schema.Schema;
 import org.junit.Before;
-import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -87,6 +87,7 @@ import org.springframework.web.context.WebApplicationContext;
 @AutoConfigureMockMvc(secure = false)
 @ActiveProfiles({"test"})
 public class AnalysisTypeControllerTest {
+  private static final boolean ENABLE_HTTP_LOGGING = false;
 
   // This was done because the autowired mockMvc wasn't working properly, it was getting http 403
   // errors
@@ -105,7 +106,7 @@ public class AnalysisTypeControllerTest {
   @Before
   public void beforeTest() {
     this.mockMvc = MockMvcBuilders.webAppContextSetup(webApplicationContext).build();
-    this.endpointTester = createEndpointTester(mockMvc, true);
+    this.endpointTester = createEndpointTester(mockMvc, ENABLE_HTTP_LOGGING);
     this.randomGenerator = createRandomGenerator(getClass().getCanonicalName());
   }
 
@@ -374,18 +375,18 @@ public class AnalysisTypeControllerTest {
     assertJsonEquals(expected, actual, when(IGNORING_ARRAY_ORDER));
   }
 
+  /** Assert the flyway migration for legacy variantCall analysisType was run */
   @Test
-  @Ignore
   @SneakyThrows
   public void getLegacyVariantCall_existing_success() {
-    runLegacyVariantCallTest("variantCall");
+    runLegacyAnalysisTypeTest("variantCall");
   }
 
+  /** Assert the flyway migration for legacy sequencingRead analysisType was run */
   @Test
-  @Ignore
   @SneakyThrows
   public void getLegacySequencingRead_existing_success() {
-    runLegacyVariantCallTest("sequencingRead");
+    runLegacyAnalysisTypeTest("sequencingRead");
   }
 
   /** Test the default size is DEFAULT_LIMIT */
@@ -571,17 +572,20 @@ public class AnalysisTypeControllerTest {
 
   private void runInvalidRegisterTest(
       String filename, String expectedMessage, ServerError expectedServerError) {
-    val nonExistingName = generateUniqueName();
     val inputInvalidSchema =
         FETCHER.readJsonNode(Paths.get("schema-fixtures/invalid").resolve(filename).toString());
+    runInvalidRegisterTest(inputInvalidSchema, expectedMessage, expectedServerError);
+  }
+
+  private void runInvalidRegisterTest(
+      JsonNode invalidSchema, String expectedMessage, ServerError expectedServerError) {
+    val nonExistingName = generateUniqueName();
     val registerRequest =
-        RegisterAnalysisTypeRequest.builder()
-            .name(nonExistingName)
-            .schema(inputInvalidSchema)
-            .build();
+        RegisterAnalysisTypeRequest.builder().name(nonExistingName).schema(invalidSchema).build();
     val songErrorResponse =
         endpointTester
             .registerAnalysisTypePostRequestAnd(registerRequest)
+            .assertIsError()
             .assertServerError(expectedServerError)
             .getResponse();
     val songError = parseErrorResponse(songErrorResponse);
@@ -646,6 +650,37 @@ public class AnalysisTypeControllerTest {
 
     r.setSchema(mapper().createObjectNode());
     endpointTester.registerAnalysisTypePostRequestAnd(r).assertServerError(SCHEMA_VIOLATION);
+  }
+
+  @Test
+  public void register_illegalFields_schemaViolation() {
+    Stream.of(
+            "analysisId",
+            "analysisState",
+            "study",
+            "analysisType",
+            "analysisTypeId",
+            "sample",
+            "file")
+        .forEach(
+            f -> {
+              // Create an invalid schema using one of the invalid fields
+              val inputInvalidSchema =
+                  FETCHER.readJsonNode(Paths.get("schema-fixtures/valid.json").toString());
+              val properties = (ObjectNode) inputInvalidSchema.path("properties");
+              val field = properties.putObject(f);
+              field.put("type", "string");
+
+              log.info("Testing illegal field: " + f);
+
+              // Test
+              runInvalidRegisterTest(
+                  inputInvalidSchema,
+                  "[AnalysisTypeService::schema.violation] - #/properties/"
+                      + f
+                      + ": subject must not be valid against schema {},#: expected type: Boolean, found: JSONObject",
+                  SCHEMA_VIOLATION);
+            });
   }
 
   /** Happy Path: test filtering the listing endpoint by multiple versions only */
@@ -721,10 +756,9 @@ public class AnalysisTypeControllerTest {
     assertTrue(actualNoAnalysisTypes.isEmpty());
   }
 
-  private void runLegacyVariantCallTest(String name) {
+  private void runLegacyAnalysisTypeTest(String name) {
     val fetcher =
         ResourceFetcher.builder().resourceType(MAIN).dataDir(Paths.get("schemas")).build();
-    val expected = fetcher.readJsonNode(name + ".json");
 
     val results =
         endpointTester
