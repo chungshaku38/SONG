@@ -150,7 +150,6 @@ public class SerializationTest {
 
     val expectedPayload =
         Payload.builder()
-            .analysisId(inputJson.path("analysisId").textValue())
             .analysisType(AnalysisTypeId.builder().name("sequencingRead").version(1).build())
             .file(newArrayList(f1, f2))
             .sample(newArrayList(sa))
@@ -247,29 +246,6 @@ public class SerializationTest {
             id, submitterId, studyId, gender, metadata);
     val expectedJson = JsonUtils.fromSingleQuoted(expected);
     assertEquals(json, expectedJson);
-  }
-
-  @Test
-  public void testInvalidValues() {
-    val id = "DO000123";
-    val submitterId = "123";
-    val studyId = "X23-CA";
-    val gender = "potatoes";
-
-    boolean failed = false;
-    try {
-      val donor =
-          Donor.builder()
-              .donorId(id)
-              .donorSubmitterId(submitterId)
-              .studyId(studyId)
-              .donorGender(gender)
-              .build();
-    } catch (IllegalArgumentException e) {
-      failed = true;
-    }
-
-    assertTrue(failed);
   }
 
   @Test
